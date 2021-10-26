@@ -8,3 +8,4 @@ Covered progress in creating "unlearnable" graphs, discussed ways to improve met
 - Look into different ways of going from gradient of adjacency matrix to discrete
     - Greedy algorithim
     - Other implementations of probability
+- Annotate notebook with explanations of process.

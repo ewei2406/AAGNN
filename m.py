@@ -1,5 +1,3 @@
-import dgl
-import dgl.data
 import torch
 import numpy as np
 import torch.nn.functional as F
@@ -19,7 +17,7 @@ from deeprobust.graph.global_attack import MetaApprox, Metattack
 from deeprobust.graph.global_attack import Random
 
 
-def main(): 
+def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--cuda', type=int, default=0, help='cuda')
@@ -69,7 +67,6 @@ def main():
     args.device = torch.device(
         f'cuda:{args.cuda}' if torch.cuda.is_available() else 'cpu')
 
-
     # Setting seeds ============================
 
     np.random.seed(args.seed)
@@ -92,7 +89,7 @@ def main():
     adj, features, labels = data.adj, data.features, data.labels
 
     idx_train, idx_val, idx_test = data.idx_train, data.idx_val, data.idx_test
-    
+
     idx_unlabeled = np.union1d(idx_val, idx_test)
 
     print('==== Dataset ====')
@@ -116,8 +113,9 @@ def main():
     reg_model = reg_model.to(args.device)
 
     # Train regularly ========================
-    
-    reg_model.fit(features, adj, labels, idx_train, verbose=True, train_iters=20)
+
+    reg_model.fit(features, adj, labels, idx_train,
+                  verbose=True, train_iters=20)
 
     # Evaluate performance ===================
 

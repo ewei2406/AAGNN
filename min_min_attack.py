@@ -18,6 +18,46 @@ from deeprobust.graph.global_attack import MinMax
 from deeprobust.graph.global_attack import MetaApprox, Metattack
 from deeprobust.graph.global_attack import Random
 
+from utils import *
+
+def attack(model, features, adj, labels, idx_train, n_perturbations, epochs=200):
+
+    adj = torch.tensor(adj)
+
+    perturbations = torch.zeros_like(adj)
+    optimizer = optim.Adam(model.parameters(), lr=0.01)
+
+    for epoch in range(epochs):
+        # Training the model
+        model.train()
+        modified_adj = get_modified_adj(adj, perturbations)
+        # Normalize the adjacency matrix?
+        modified_adj = normalize_adj(modified_adj)
+
+        predictions = model(features, modified_adj)
+        loss = F.cross_entropy(predictions[idx_train], labels[idx_train])
+
+        get_acc(predictions, labels, idx_train)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # Attack the data
+        model.eval()
+        modified_adj = get_modified_adj(adj, perturbations)
+        # Normalize the adjacency matrix?
+        modified_adj = normalize_adj(modified_adj)
+
+        predictions = model(features, modified_adj)
+        loss = F.cross_entropy(predictions[idx_train], labels[idx_train])
+        adj_grad = torch.autograd.grad(loss, perturbations)[0]
+
+        # Adjust learning rate
+        lr = 200 / np.sqrt(t+1)
+        perturbations = perturbations + (lr * adj_grad)
+
+    return perturbations
 
 def main(): 
 
@@ -95,7 +135,7 @@ def main():
     
     idx_unlabeled = np.union1d(idx_val, idx_test)
 
-    print('==== Dataset ====')
+    print('==== Dataset ====')  
     print(f'density: {nx.density(nx.from_numpy_array(adj))}')
     print(f'adj shape: {adj.shape}')
     print(f'feature shape: {features.shape}')
@@ -104,7 +144,7 @@ def main():
     print(
         f'train|valid|test set: {idx_train.shape}|{idx_val.shape}|{idx_test.shape}')
 
-    # Create model ======================
+    # Create model ==========================
 
     reg_model = GCN(
         nfeat=features.shape[1],
@@ -118,6 +158,21 @@ def main():
     # Train regularly ========================
     
     reg_model.fit(features, adj, labels, idx_train, verbose=True, train_iters=20)
+
+    # Attack data ============================
+
+    surrogate_model = GCN(
+        nfeat=features.shape[1],
+        nclass=labels.max().item()+1,
+        nhid=args.hidden,
+        dropout=args.dropout,
+        weight_decay=args.weight_decay,
+        device=args.device)
+    surrogate_model = surrogate_model.to(args.device)
+
+    key = attack(surrogate_model, features, adj, labels, idx_train, 1000)
+
+    # Train on perturbed data ================
 
     # Evaluate performance ===================
 

@@ -1,15 +1,37 @@
+from deeprobust.graph.global_attack import BaseAttack
+from deeprobust.graph import utils
+from tqdm import tqdm
+from torch.nn.parameter import Parameter
+from torch.nn import functional as F
+from torch import optim
+import scipy.sparse as sp
+import numpy as np
 import torch.nn.functional as F
+import torch
 
 
-def get_acc(prediction, truth, mask):
-    """
-    Cross entropy loss and accuracy
-    """
+def show_acc(epoch, predictions, labels, idx_train, idx_test, verbose=False):
+    train_correct = (predictions.argmax(
+        1)[idx_train] == labels[idx_train]).sum()
+    train_acc = (train_correct) / (idx_train.sum())
 
-    loss = F.cross_entropy(prediction[mask], target[mask]).item()
-    acc = (prediction[mask] == target[mask]).sum() / mask.sum()
+    test_correct = (predictions.argmax(1)[idx_test] == labels[idx_test]).sum()
+    test_acc = (test_correct) / (idx_test.sum())
 
-    return loss, acc
+    loss = F.cross_entropy(predictions[idx_train], labels[idx_train])
+
+    if verbose:
+        if epoch:
+            print(
+                f"Epoch: {epoch} \t Train: {train_acc:.2%} \t Test: {test_acc:.2%} \t Loss: {loss:.2f}")
+        else:
+            print(
+                f"Train: {train_acc:.2%} \t Test: {test_acc:.2%} \t Loss: {loss:.2f}")
+
+
+def evaluate_acc(model, features, adj, labels, idx_train, idx_test):
+    predictions = model(features, adj).squeeze()
+    show_acc(False, predictions, labels, idx_train, idx_test, True)
 
 
 def to_adj(edge_ind):
@@ -65,3 +87,84 @@ def invert_by(adj, adj_changes):
     """
     return (adj + adj_changes) - torch.mul(adj * adj_changes, 2)
 
+
+def normalize_adj(adj):
+    """
+    Normalizes adjacency matrix
+    """
+    device = adj.device
+    mx = adj + torch.eye(adj.shape[0]).to(device)
+    rowsum = mx.sum(1)
+    r_inv = rowsum.pow(-1/2).flatten()
+    r_inv[torch.isinf(r_inv)] = 0.
+    r_mat_inv = torch.diag(r_inv)
+    mx = r_mat_inv @ mx
+    mx = mx @ r_mat_inv
+    return mx
+
+
+def get_modified_adj(adj, perturbations):
+    adj_changes_square = perturbations - \
+        torch.diag(torch.diag(perturbations, 0))
+    # ind = np.diag_indices(adj_changes.shape[0]) # this line seems useless
+    adj_changes_square = adj_changes_square + torch.transpose(adj_changes_square, 1, 0)
+
+    adj_changes_square = torch.clamp(adj_changes_square, -1, 1)
+
+    modified_adj = adj_changes_square + adj
+    
+    return modified_adj
+
+
+def projection(perturbations, n_perturbations):
+    # projected = torch.clamp(self.adj_changes, 0, 1)
+    if torch.clamp(perturbations, 0, 1).sum() > n_perturbations:
+        left = (perturbations - 1).min()
+        right = perturbations.max()
+        miu = bisection(perturbations, left, right, n_perturbations, epsilon=1e-5)
+        perturbations.data.copy_(torch.clamp(
+            perturbations.data - miu, min=0, max=1))
+    else:
+        perturbations.data.copy_(torch.clamp(
+            perturbations.data, min=0, max=1))
+    
+    return perturbations
+
+
+def func(perturbations, x, n_perturbations):
+    return torch.clamp(perturbations-x, 0, 1).sum() - n_perturbations
+
+
+def bisection(perturbations, a, b, n_perturbations, epsilon):
+    miu = a
+    while ((b-a) >= epsilon):
+        miu = (a+b)/2
+        # Check if middle point is root
+        if (func(perturbations, miu, n_perturbations) == 0.0):
+            break
+        # Decide the side to repeat the steps
+        if (func(perturbations, miu, n_perturbations)*func(perturbations, a, n_perturbations) < 0):
+            b = miu
+        else:
+            a = miu
+    # print("The value of root is : ","%.4f" % miu)
+    return miu
+
+def csr_to_tensor(csr):
+    numpy_array = csr.toarray()
+    tensor = torch.from_numpy(numpy_array)
+    return tensor.long()
+
+
+def indices_to_binary(indices, length):
+    arr = torch.zeros(length)
+    arr[indices] = 1
+    return arr > 0
+
+
+def process(data, device):
+    labels = torch.LongTensor(data.labels)
+    features = torch.FloatTensor(np.array(data.features.todense()))
+    adj = torch.LongTensor(data.adj.todense())
+
+    return adj, features, labels

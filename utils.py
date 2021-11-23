@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import torch
 
 
-def show_acc(epoch, predictions, labels, idx_train, idx_test, verbose=False):
+def show_acc(epoch, predictions, labels, idx_train, idx_test, verbose=False, prefix=""):
     train_correct = (predictions.argmax(
         1)[idx_train] == labels[idx_train]).sum()
     train_acc = (train_correct) / (idx_train.sum())
@@ -23,15 +23,15 @@ def show_acc(epoch, predictions, labels, idx_train, idx_test, verbose=False):
     if verbose:
         if epoch:
             print(
-                f"Epoch: {epoch} \t Train: {train_acc:.2%} \t Test: {test_acc:.2%} \t Loss: {loss:.2f}")
+                f"{prefix}Epoch: {epoch} \t Train: {train_acc:.2%} \t Test: {test_acc:.2%} \t Loss: {loss:.2f}")
         else:
             print(
-                f"Train: {train_acc:.2%} \t Test: {test_acc:.2%} \t Loss: {loss:.2f}")
+                f"{prefix}Train: {train_acc:.2%} \t Test: {test_acc:.2%} \t Loss: {loss:.2f}")
 
 
-def evaluate_acc(model, features, adj, labels, idx_train, idx_test):
+def evaluate_acc(model, features, adj, labels, idx_train, idx_test, prefix=""):
     predictions = model(features, adj).squeeze()
-    show_acc(False, predictions, labels, idx_train, idx_test, True)
+    show_acc(False, predictions, labels, idx_train, idx_test, True, prefix)
 
 
 def to_adj(edge_ind):

@@ -104,14 +104,16 @@ def normalize_adj(adj):
 
 
 def get_modified_adj(adj, perturbations):
-    adj_changes_square = perturbations - \
-        torch.diag(torch.diag(perturbations, 0))
-    # ind = np.diag_indices(adj_changes.shape[0]) # this line seems useless
-    adj_changes_square = adj_changes_square + torch.transpose(adj_changes_square, 1, 0)
+    # adj_changes_square = perturbations - \
+    #     torch.diag(torch.diag(perturbations, 0))
+    # # ind = np.diag_indices(adj_changes.shape[0]) # this line seems useless
+    # adj_changes_square = adj_changes_square + torch.transpose(adj_changes_square, 1, 0)
 
-    adj_changes_square = torch.clamp(adj_changes_square, -1, 1)
+    # adj_changes_square = torch.clamp(adj_changes_square, -1, 1)
 
-    modified_adj = adj_changes_square + adj
+    # modified_adj = adj_changes_square + adj
+
+    modified_adj = invert_by(adj, perturbations)
     
     return modified_adj
 
@@ -168,3 +170,29 @@ def process(data, device):
     adj = torch.LongTensor(data.adj.todense())
 
     return adj, features, labels
+
+
+def edge_types(adj, labels):
+    edges = to_index(adj).t().squeeze()
+    similarities = []
+    for edge in edges:
+        is_same = labels[edge[0]] == labels[edge[1]]
+        similarities.append(is_same)
+    
+    similarities = np.array(similarities)
+
+    return int(similarities.sum() / 2), int((len(similarities) - similarities.sum()) / 2)
+
+
+def show_change_matrix(adj, perturbed, labels):
+    same, diff = edge_types(adj, labels)
+    
+    print(
+        f"Clean || Same: {same} \t Different: {diff}")
+
+    p_same, p_diff = edge_types(perturbed, labels)
+
+    print(
+        f"Atk   || Same: {p_same} \t Different: {p_diff}")
+
+    print(f"Diff  || Same: {p_same - same} \t Different: {p_diff - diff}")

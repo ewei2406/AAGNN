@@ -282,18 +282,31 @@ def main():
     surrogate_model.eval()
     posisoned_model.eval()
 
+    print("")
     print("#" * 30)
     print(
-        f"Evaluation ({args.ptb_rate:.2%} budget)")
-    print("#" * 30)
+        f"Evaluation of {args.ptb_rate:.2%} budget for {args.attack_type} attack with {args.atk_epochs} attack epochs")
+    print(f"Model reset: {args.reset_model}  \
+Pretrain={args.pretrain_epochs}  \
+atk_loops={args.atk_train_loops}  \
+adj_loops={args.atk_adj_loops}")
+    print("")
 
-    evaluate_acc(model, features, adj, labels,
-                 idx_train, idx_test, "Baseline model on clean data:       ")
+    
+    _, base_test = evaluate_acc(model, features, adj, labels,
+                 idx_train, idx_test, "Baseline on clean:     ")
 
     evaluate_acc(posisoned_model, features, attacked_adj, labels,
-                 idx_train, idx_test, "Poisoned model on perturbed data:   ")
+                 idx_train, idx_test, "Poisoned on perturbed: ")
+    
+    _, pert_test = evaluate_acc(posisoned_model, features, adj, labels,
+                 idx_train, idx_test, "Poisoned on clean:     ")
+
+    print("")
+    print(f"Reduction in predictive power: {base_test - pert_test:.2%}")
 
     show_change_matrix(adj, attacked_adj, labels)
+    summarize_edges(adj, attacked_adj, labels)
 
     # print("==== Model trained on clean graph ====")
     # evaluate_acc(model, features, adj, labels,
@@ -319,4 +332,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    print("finished!")

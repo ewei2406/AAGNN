@@ -1,4 +1,4 @@
-from utils import *
+from .utils import *
 
 def train_step(model, optimizer, features, adj, labels, idx_train, loss_fn):
     model.train()
@@ -10,29 +10,6 @@ def train_step(model, optimizer, features, adj, labels, idx_train, loss_fn):
     optimizer.step()
 
     return predictions
-
-
-def adj_step(surrogate_model, features, adj, labels, idx_train, loss_fn, loss_inverse, perturbations, epoch, lr_0, num_perturbations):
-    surrogate_model.eval()
-    modified_adj = get_modified_adj(adj, perturbations)
-
-    predictions = surrogate_model(features, modified_adj).squeeze()
-
-    if loss_inverse:
-        loss = -loss_fn(predictions[idx_train], labels[idx_train])
-    else:
-        loss = loss_fn(predictions[idx_train], labels[idx_train])
-
-    adj_grad = torch.autograd.grad(loss, perturbations)[0]
-
-    lr = 200 / (np.sqrt(epoch+1))
-    perturbations = perturbations + (lr * adj_grad)
-    perturbations = projection(perturbations, num_perturbations)
-
-    print(
-        f"Epoch: {epoch+1} \t Edges perturbed: {int(perturbations.sum())} \t Loss: {loss:.2f}")
-    
-    return perturbations
 
 
 def random_sample(surrogate_model, features, adj, labels, idx_test, loss_fn, perturbations, k=10):

@@ -12,9 +12,38 @@ from torch_geometric.datasets import Planetoid
 
 from deeprobust.graph.data import Dataset
 
-from utils import *
-from training import *
-from models import GCN
+from aagnn.utils import *
+from aagnn.training import *
+from aagnn.models import GCN
+
+
+def adj_step(surrogate_model, features, adj, labels, idx_train, loss_fn, loss_inverse, perturbations, epoch, lr_0, num_perturbations, ptb_rate):
+    surrogate_model.eval()
+    modified_adj = get_modified_adj(adj, perturbations)
+
+    predictions = surrogate_model(features, modified_adj).squeeze()
+
+    if loss_inverse:
+        loss = -loss_fn(predictions[idx_train], labels[idx_train])
+    else:
+        loss = loss_fn(predictions[idx_train], labels[idx_train])
+
+    adj_grad = torch.autograd.grad(loss, perturbations)[0]
+
+    print(adj_grad.sum())
+
+    lr = ((ptb_rate ** 2) * 100) / (np.sqrt(epoch+1))
+
+    perturbations = perturbations + (lr * adj_grad)
+
+    print(perturbations.sum())
+    
+    perturbations = projection(perturbations, num_perturbations)
+
+    print(
+        f"Epoch: {epoch+1} \t Edges perturbed: {int(perturbations.sum())} \t Loss: {loss:.2f}")
+    
+    return perturbations
 
 
 def main():
@@ -228,7 +257,8 @@ def main():
                 perturbations=perturbations,
                 epoch=epoch,
                 lr_0=args.atk_lr,
-                num_perturbations=num_perturbations
+                num_perturbations=num_perturbations,
+                ptb_rate=float(args.ptb_rate)
             )
 
     # Draw samples from best ==========

@@ -3,32 +3,6 @@ import torch.nn.functional as F
 import torch
 
 
-def show_acc(epoch, predictions, labels, idx_train, idx_test, verbose=False, prefix=""):
-    train_correct = (predictions.argmax(
-        1)[idx_train] == labels[idx_train]).sum()
-    train_acc = (train_correct) / (idx_train.sum())
-
-    test_correct = (predictions.argmax(1)[idx_test] == labels[idx_test]).sum()
-    test_acc = (test_correct) / (idx_test.sum())
-
-    loss = F.cross_entropy(predictions[idx_train], labels[idx_train])
-
-    if verbose:
-        if epoch:
-            print(
-                f"{prefix}Epoch: {epoch} \t Train: {train_acc:.2%} \t Test: {test_acc:.2%} \t Loss: {loss:.2f}")
-        else:
-            print(
-                f"{prefix}Train: {train_acc:.2%} \t Test: {test_acc:.2%} \t Loss: {loss:.2f}")
-    
-    return train_acc, test_acc
-
-
-def evaluate_acc(model, features, adj, labels, idx_train, idx_test, prefix=""):
-    predictions = model(features, adj).squeeze()
-    return show_acc(False, predictions, labels, idx_train, idx_test, True, prefix)
-
-
 def to_adj(edge_ind):
     """
     Converts a list of edges to an adjacency matrix.
@@ -98,19 +72,24 @@ def normalize_adj(adj):
     return mx
 
 
-def get_modified_adj(adj, perturbations):
-    # adj_changes_square = perturbations - \
-    #     torch.diag(torch.diag(perturbations, 0))
-    # # ind = np.diag_indices(adj_changes.shape[0]) # this line seems useless
-    # adj_changes_square = adj_changes_square + torch.transpose(adj_changes_square, 1, 0)
+def random_sample(surrogate_model, features, adj, labels, idx_test, loss_fn, perturbations, k=10):
+    min_loss = 1000
+    with torch.no_grad():
+        for i in range(k):
+            sample = torch.bernoulli(perturbations)
+            modified_adj = invert_by(adj, sample)
 
-    # adj_changes_square = torch.clamp(adj_changes_square, -1, 1)
+            sample_predictions = surrogate_model(
+                features, modified_adj).squeeze()
+            loss = loss_fn(
+                sample_predictions[idx_test], labels[idx_test])
+            if loss < min_loss:
+                min_loss = loss
+                best = sample
 
-    # modified_adj = adj_changes_square + adj
+    print(f"Best sample: {int(best.sum())} edges \t Loss: {loss.item():.2f}")
 
-    modified_adj = invert_by(adj, perturbations)
-    
-    return modified_adj
+    return best
 
 
 def projection(perturbations, n_perturbations):
@@ -128,11 +107,11 @@ def projection(perturbations, n_perturbations):
     return perturbations
 
 
-def func(perturbations, x, n_perturbations):
-    return torch.clamp(perturbations-x, 0, 1).sum() - n_perturbations
-
-
 def bisection(perturbations, a, b, n_perturbations, epsilon):
+
+    def func(perturbations, x, n_perturbations):
+        return torch.clamp(perturbations-x, 0, 1).sum() - n_perturbations
+    
     miu = a
     while ((b-a) >= epsilon):
         miu = (a+b)/2
@@ -146,80 +125,3 @@ def bisection(perturbations, a, b, n_perturbations, epsilon):
             a = miu
     # print("The value of root is : ","%.4f" % miu)
     return miu
-
-def csr_to_tensor(csr):
-    numpy_array = csr.toarray()
-    tensor = torch.from_numpy(numpy_array)
-    return tensor.long()
-
-
-def indices_to_binary(indices, length):
-    arr = torch.zeros(length)
-    arr[indices] = 1
-    return arr > 0
-
-
-def process(data, device):
-    labels = torch.LongTensor(data.labels)
-    features = torch.FloatTensor(np.array(data.features.todense()))
-    adj = torch.LongTensor(data.adj.todense())
-
-    return adj, features, labels
-
-
-def edge_types(adj, labels):
-    edges = to_index(adj).t().squeeze()
-    similarities = []
-    for edge in edges:
-        is_same = labels[edge[0]] == labels[edge[1]]
-        similarities.append(is_same)
-    
-    similarities = np.array(similarities)
-
-    return int(similarities.sum()), int((len(similarities) - similarities.sum()))
-
-
-def summarize_edges (adj, perturbed, labels):
-    same, diff = edge_types(adj, labels)
-    
-
-    p_same, p_diff = edge_types(perturbed, labels)
-
-    print(f"")
-    print(f"Edge Summary")
-    print(f"        Same\tDiff")
-    print(f"      +------------------")
-    print(f"Clean | {same}\t{diff}")
-    print(f"Atk   | {p_same}\t{p_diff}")
-    print(f"Diff  | {p_same - same}\t{p_diff - diff}")
-    print(f"      +------------------")
-
-
-def same_diff(edges, labels):
-    similarities = []
-    for edge in edges:
-        is_same = labels[edge[0]] == labels[edge[1]]
-        similarities.append(is_same)
-
-    similarities = np.array(similarities)
-    return int(similarities.sum()), int((len(similarities) - similarities.sum()))
-
-
-def show_change_matrix(adj, perturbed, labels):
-    diff = perturbed - adj
-    added = to_index(diff.clamp(0, 1)).t()
-    removed = to_index(diff.clamp(-1, 0).abs()).t()
-
-    s_added, d_added = same_diff(added, labels)
-    s_removed, d_removed = same_diff(removed, labels)
-
-    total = s_added + d_added + s_removed + d_removed
-
-    print(f"")
-    print(f"Changes Applied")
-    print(f"          Same\tDiff")
-    print(f"        +---------------")
-    print(f"Added   | {s_added}\t{d_added}")
-    print(f"Removed | {s_removed}\t{d_removed}")
-    print(f"        +---------------")
-    print(f"Total Chages={total}")

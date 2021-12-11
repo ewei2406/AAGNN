@@ -12,14 +12,16 @@ from torch_geometric.datasets import Planetoid
 
 from deeprobust.graph.data import Dataset
 
-from aagnn.utils import *
-from aagnn.training import *
+import aagnn.utils as utils
+import aagnn.metrics as metrics
+import aagnn.dataLoading as dataLoading
+from aagnn.training import train_step
 from aagnn.models import GCN
 
 
 def adj_step(surrogate_model, features, adj, labels, idx_train, loss_fn, loss_inverse, perturbations, epoch, lr_0, num_perturbations, ptb_rate):
     surrogate_model.eval()
-    modified_adj = get_modified_adj(adj, perturbations)
+    modified_adj = utils.invert_by(adj, perturbations)
 
     predictions = surrogate_model(features, modified_adj).squeeze()
 
@@ -38,7 +40,7 @@ def adj_step(surrogate_model, features, adj, labels, idx_train, loss_fn, loss_in
 
     print(perturbations.sum())
     
-    perturbations = projection(perturbations, num_perturbations)
+    perturbations = utils.projection(perturbations, num_perturbations)
 
     print(
         f"Epoch: {epoch+1} \t Edges perturbed: {int(perturbations.sum())} \t Loss: {loss:.2f}")
@@ -88,12 +90,12 @@ def main():
     parser.add_argument('--atk_adj_loops', type=int, default=1,
                         help='number of times to attempt to perturb adj further each epoch')
 
-    args = parser.parse_args()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
     ################################################
     # Setup environment
     ################################################
+
+    args = parser.parse_args()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -110,22 +112,14 @@ def main():
     # Load data
     ################################################
 
-    data = Dataset(root=args.data_dir, name=args.dataset,
-                   setting='gcn', seed=args.data_seed)
+    data = Dataset(
+        root=args.data_dir, 
+        name=args.dataset, 
+        setting='gcn', 
+        seed=args.data_seed)
 
-    adj, features, labels = process(data, device)
-
-    idx_train = indices_to_binary(data.idx_train, features.shape[0])
-    idx_val = indices_to_binary(data.idx_val, features.shape[0])
-    idx_test = indices_to_binary(data.idx_test, features.shape[0])
-
-    print('==== Dataset ====')
-    print(f'adj shape: {list(adj.shape)}')
-    print(f'feature shape: {list(features.shape)}')
-    print(f'num labels: {labels.max().item()+1}')
-    print(f'split seed: {args.data_seed}')
-    print(
-        f'train|val|test: {idx_train.sum()}|{idx_val.sum()}|{idx_test.sum()}')
+    adj, features, labels, idx_train, idx_val, idx_test = \
+        dataLoading.aagnn_format(data, device, args, verbose=True)
 
     ################################################
     # Train a model regularly
@@ -155,7 +149,7 @@ def main():
             loss_fn=F.cross_entropy
         )
 
-        show_acc(epoch+1, predictions, labels, idx_train, idx_test, True)
+        metrics.show_acc(epoch+1, predictions, labels, idx_train, idx_test, True)
 
     ################################################
     # Attack the data
@@ -191,7 +185,7 @@ def main():
             loss_fn=F.cross_entropy
         )
 
-        show_acc(epoch+1, predictions, labels, idx_train, idx_test, True)
+        metrics.show_acc(epoch+1, predictions, labels, idx_train, idx_test, True)
 
     # Attack the data =========================
 
@@ -223,7 +217,7 @@ def main():
         # modified_adj = normalize_adj(modified_adj) # Normalize
 
         for i in range(args.atk_train_loops):
-            modified_adj = get_modified_adj(adj, perturbations)
+            modified_adj = invert_by(adj, perturbations)
 
             predictions = train_step(
                 model=surrogate_model,
@@ -235,7 +229,7 @@ def main():
                 loss_fn=F.cross_entropy
             )
 
-        show_acc(epoch+1, predictions, labels,
+        metrics.show_acc(epoch+1, predictions, labels,
                     idx_train, idx_test, False)
 
         # Perturb the adj matrix =================
@@ -263,7 +257,7 @@ def main():
 
     # Draw samples from best ==========
 
-    best = random_sample(
+    best = utils.random_sample(
         surrogate_model=surrogate_model,
         features=features,
         adj=adj,
@@ -279,7 +273,7 @@ def main():
 
     print('==== Training model on attacked data ====')
 
-    attacked_adj = get_modified_adj(adj, best)
+    attacked_adj = utils.invert_by(adj, best)
 
     posisoned_model = GCN(
         input_features=features.shape[1],
@@ -303,7 +297,7 @@ def main():
             loss_fn=F.cross_entropy
         )
 
-        show_acc(epoch+1, predictions, labels, idx_train, idx_test, True)
+        metrics.show_acc(epoch+1, predictions, labels, idx_train, idx_test, True)
 
     ################################################
     # Evaluation
@@ -323,20 +317,20 @@ adj_loops={args.atk_adj_loops}")
     print("")
 
     
-    _, base_test = evaluate_acc(model, features, adj, labels,
+    _, base_test = metrics.evaluate_acc(model, features, adj, labels,
                  idx_train, idx_test, "Baseline on clean:     ")
 
-    evaluate_acc(posisoned_model, features, attacked_adj, labels,
+    metrics.evaluate_acc(posisoned_model, features, attacked_adj, labels,
                  idx_train, idx_test, "Poisoned on perturbed: ")
     
-    _, pert_test = evaluate_acc(posisoned_model, features, adj, labels,
+    _, pert_test = metrics.evaluate_acc(posisoned_model, features, adj, labels,
                  idx_train, idx_test, "Poisoned on clean:     ")
 
     print("")
     print(f"Reduction in predictive power: {base_test - pert_test:.2%}")
 
-    show_change_matrix(adj, attacked_adj, labels)
-    summarize_edges(adj, attacked_adj, labels)
+    metrics.show_change_matrix(adj, attacked_adj, labels)
+    metrics.summarize_edges(adj, attacked_adj, labels)
 
     # print("==== Model trained on clean graph ====")
     # evaluate_acc(model, features, adj, labels,

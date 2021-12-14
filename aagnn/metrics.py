@@ -84,3 +84,44 @@ def show_change_matrix(adj, perturbed, labels):
     print(f"Removed | {s_removed}\t{d_removed}")
     print(f"        +---------------")
     print(f"Total Chages={total}")
+
+
+def acc_by_label(predictions, labels, idx_test, targets, verbose=True):
+    """
+    Returns the mean accuracy of predictions on specified label targets
+    
+    Parameters
+    ---
+    predictions : torch.tensor
+        Model predictions
+    labels : torch.tensor
+        Ground-truth labels
+    idx_test : torch.tensor
+        Test indices
+    targets : array
+        Target labels
+    verbose : bool (optional)
+        Enable displaying result
+
+    Returns
+    ---
+    out : float
+        Accuracy (0, 1)
+    
+    Examples
+    ---
+    
+    """
+
+    cumulative = 0
+
+    for l in targets:
+        target_labels = labels[idx_test] == l
+
+        test_correct = (predictions.argmax(1)[idx_test][target_labels] == l).sum()
+        test_acc = test_correct / (target_labels.sum())
+
+        cumulative += test_acc
+
+    return (cumulative / len(targets)).item()
+

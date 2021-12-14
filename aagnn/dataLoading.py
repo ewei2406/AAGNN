@@ -111,8 +111,7 @@ def aagnn_format(data, device, args, verbose=True):
             setting='gcn', 
             seed=args.data_seed)
 
-    >>> adj, features, labels, idx_train, idx_val, idx_test = \
-        dataLoading.aagnn_format(data, device, args, verbose=True)
+    >>> adj, features, labels, idx_train, idx_val, idx_test = dataLoading.aagnn_format(data, device, args, verbose=True)
     
     """
     

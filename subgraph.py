@@ -53,6 +53,11 @@ def main():
                         help='Epochs to perturb adj matrix')
     parser.add_argument('--surrogate_epochs', type=int, default=10,
                         help='Epochs to train surrogate')
+    parser.add_argument('--surrogate_train', type=str, default="N", #Y
+                        help='Enable continual training on surrogate')
+    
+    parser.add_argument('--csv', type=str, default='',
+                        help='save the outputs to csv')
 
     ################################################
     # Setup environment
@@ -103,6 +108,8 @@ def main():
         baseline_model.parameters(), lr=args.model_lr, weight_decay=args.weight_decay)
 
     t = tqdm(range(args.reg_epochs), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
+    t.set_description("Regular")
+
     for epoch in t:
         predictions = train_step(
             model=baseline_model,
@@ -134,7 +141,7 @@ def main():
         surrogate.parameters(), lr=args.model_lr, weight_decay=args.weight_decay)
 
     t = tqdm(range(args.surrogate_epochs), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
-    t.set_description("Surrogate: ")
+    t.set_description("Surrogate")
     for epoch in t:
         predictions = train_step(
             model=surrogate,
@@ -170,36 +177,39 @@ def main():
 
         adj_grad = torch.autograd.grad(loss, perturbations)[0]
 
-        lr = ((args.ptb_rate ** 2) * 10) / ((epoch+1) ** 2)
+        lr = ((args.ptb_rate) * 5) / ((epoch+1) ** 2)
 
         # diff = max(abs(perturbations.sum() - num_perturbations), num_perturbations)
         # mult = adj_grad * (diff / adj_grad.sum())
 
         perturbations = perturbations + (lr * adj_grad)
 
-        print(adj_grad.sum(), perturbations.sum(), num_perturbations)
+        # print(adj_grad.sum(), perturbations.sum(), num_perturbations)
+
+        t.set_postfix({"adj_grad": int(adj_grad.sum())})
+        t.set_postfix({"pre-projection": int(perturbations.sum())})
+        t.set_postfix({"target": int(num_perturbations)})
 
         perturbations = utils.projection(perturbations, num_perturbations)
 
         t.set_postfix({"edges_perturbed": int(perturbations.sum())})
 
         # Train surrogate
-        # modified_adj = utils.invert_by(adj, perturbations)
+        if args.surrogate_train == "Y":
+            modified_adj = utils.invert_by(adj, perturbations)
 
-        # train_step(
-        #     model=surrogate,
-        #     optimizer=optimizer,
-        #     features=features,
-        #     adj=modified_adj,
-        #     labels=labels,
-        #     idx_train=idx_train,
-        #     loss_fn=F.cross_entropy,
-        #     iterator=t
-        # )
+            train_step(
+                model=surrogate,
+                optimizer=optimizer,
+                features=features,
+                adj=modified_adj,
+                labels=labels,
+                idx_train=idx_train,
+                loss_fn=F.cross_entropy,
+                iterator=t
+            )
 
     perturbations = perturbations.clamp(0,1)
-
-
     best = utils.random_sample(
         surrogate_model=surrogate,
         features=features,
@@ -255,32 +265,68 @@ def main():
     baseline_model.eval()
     predictions = baseline_model(features, adj).squeeze()
 
-    base_all = metrics.acc_by_label(predictions, labels, idx_test, all_labels)
-    base_protected = metrics.acc_by_label(predictions, labels, idx_test, [args.protected_label])
-    base_excluding = metrics.acc_by_label(predictions, labels, idx_test, excluding)
+    c_G = metrics.acc_by_label(predictions, labels, idx_test, all_labels)
+    c_G0 = metrics.acc_by_label(predictions, labels, idx_test, [args.protected_label])
+    c_G_G0 = metrics.acc_by_label(predictions, labels, idx_test, excluding)
 
-    print(f"Base | G       : {base_all:.2%}")
-    print(f"Base | G_0     : {base_protected:.2%}")
-    print(f"Base | G - G_0 : {base_excluding:.2%}")
+    print(f"Base | G      : {c_G:.2%}")
+    print(f"Base | G0     : {c_G0:.2%}")
+    print(f"Base | G - G0 : {c_G_G0:.2%}")
 
     print("==== Locked accuracies ====")
 
     locked_model.eval()
     predictions = locked_model(features, locked_adj).squeeze()
 
-    lock_all = metrics.acc_by_label(predictions, labels, idx_test, all_labels)
-    lock_protected = metrics.acc_by_label(predictions, labels, idx_test, [args.protected_label])
-    lock_excluding = metrics.acc_by_label(predictions, labels, idx_test, excluding)
+    l_G = metrics.acc_by_label(predictions, labels, idx_test, all_labels)
+    l_G0 = metrics.acc_by_label(predictions, labels, idx_test, [args.protected_label])
+    l_G_G0 = metrics.acc_by_label(predictions, labels, idx_test, excluding)
 
-    print(f"Lock | G       : {lock_all:.2%}")
-    print(f"Lock | G_0     : {lock_protected:.2%}")
-    print(f"Lock | G - G_0 : {lock_excluding:.2%}")
+    print(f"Lock | G      : {l_G:.2%}")
+    print(f"Lock | G0     : {l_G0:.2%}")
+    print(f"Lock | G - G0 : {l_G_G0:.2%}")
 
     print("==== Change ====")
 
-    print(f"Delta | G       : {lock_all-base_all:.2%}")
-    print(f"Delta | G_0     : {lock_protected-base_protected:.2%}")
-    print(f"Delta | G - G_0 : {lock_excluding-base_excluding:.2%}")
+    d_G = l_G - c_G
+    d_G0 = l_G0 - c_G0
+    d_G_G0 = l_G_G0 - c_G_G0
+
+    print(f"Delta | G      : {d_G:.2%}")
+    print(f"Delta | G0     : {d_G0:.2%}")
+    print(f"Delta | G - G0 : {d_G_G0:.2%}")
+
+    
+    if args.csv != '':
+        csv_path = f"./{args.csv}.csv"
+
+        file_exists = os.path.isfile(csv_path)
+
+        with open (csv_path, 'a+') as f:
+            
+            if not file_exists:
+                headers = [
+                    'reg_epochs', 
+                    'ptb_epochs', 
+                    'surrogate_epochs', 
+                    'ptb_rate','protected_label', 
+                    'c_G', 'c_G0', 'c_G_G0', 
+                    'l_G', 'l_G0', 'l_G_G0', 
+                    'd_G', 'd_G0', 'd_G_G0']
+                f.write(",".join(headers) + "\n")
+
+            data = [
+                args.reg_epochs, 
+                args.ptb_epochs,
+                args.surrogate_epochs,
+                args.ptb_rate, args.protected_label,
+                c_G, c_G0, c_G_G0,
+                l_G, l_G0, l_G_G0,
+                d_G, d_G0, d_G_G0
+                ]
+                
+            f.write(",".join([str(x) for x in data]) + "\n")
+
 
 
 if __name__ == "__main__":

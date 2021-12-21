@@ -125,3 +125,84 @@ def acc_by_label(predictions, labels, idx_test, targets, verbose=True):
 
     return (cumulative / len(targets)).item()
 
+
+def count_label_edges(adj, labels, l0, l1):
+    """
+    Returns the number of edges that are between nodes of label l0 and l1 in the graph.
+    
+    Parameters
+    ---
+    adj : Torch.tensor
+        Binary adjacency matrix
+    labels : Array-like
+        Labels of nodes
+    l0 : any
+        Target label of l0
+    l1 : any
+        Target label of l1
+    
+    Returns
+    ---
+    out : int
+        Number of edges of type l0-l1
+    
+    Examples
+    ---
+    >>>
+    
+    """
+    
+    edges = to_index(adj).t().squeeze()
+    matches = []
+    for edge in edges:
+        match = (labels[edge[0]] == l0 and labels[edge[1]] == l1) or (
+            labels[edge[0]] == l1 and labels[edge[1]] == l0)
+        matches.append(match)
+
+    matches = np.array(matches)
+
+    return int(matches.sum())
+
+
+def target_diff(edges, labels, target_idx):
+    similarities = []
+    differences = []
+    exclusions = []
+    for edge in edges:
+        similar = edge[0] in target_idx and edge[1] in target_idx
+        similarities.append(similar)
+
+        diff = (edge[0] in target_idx and edge[1] not in target_idx) or (
+            edge[0] not in target_idx and edge[1] in target_idx)
+        differences.append(diff)
+
+        exclude = edge[0] not in target_idx and edge[1] not in target_idx
+        exclusions.append(exclude)
+
+    similarities = np.array(similarities)
+
+    def count(a):
+        return int(np.array(a).sum())
+
+    return count(similarities), count(differences), count(exclusions)
+
+
+def show_target_change_matrix(adj, perturbed, labels, target_idx):
+    diff = perturbed - adj
+    added = to_index(diff.clamp(0, 1)).t()
+    removed = to_index(diff.clamp(-1, 0).abs()).t()
+
+    s_added, d_added, e_added = target_diff(added, labels, target_idx)
+    s_removed, d_removed, e_added = same_diff(removed, labels, target_idx)
+
+    total = s_added + d_added + e_added + s_removed + d_removed + e_added
+
+    print(f"")
+    print(f"Changes Applied")
+    print(f"           Added\tRemoved")
+    print(f"          +---------------")
+    print(f" G0- G0   | {s_added}\t{s_removed}")
+    print(f" G0-!G0   | {d_added}\t{d_removed}")
+    print(f"!G0-!G0   | {e_added}\t{e_added}")
+    print(f"          +---------------")
+    print(f"Total Chages={total}")

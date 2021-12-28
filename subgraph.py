@@ -348,7 +348,7 @@ def main():
                     'surrogate_epochs', 
                     'randomized', 'ptb_rate','protected_size', 'retrain',
                     'base_g0', 'lock_g0', 'change_g0',
-                    'base_g_g0', 'lock_g_g0', 'lock_g_g0',
+                    'base_g_g0', 'lock_g_g0', 'change_g_g0',
                     'g0g0_add', 'g0g0_remove',
                     'g0gX_add', 'g0gX_remove',
                     'gXgX_add', 'gXgX_remove',

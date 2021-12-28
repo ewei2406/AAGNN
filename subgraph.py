@@ -1,22 +1,15 @@
 import torch
-import numpy as np
 import torch.nn.functional as F
 
 import os
 import argparse
+import numpy as np
 from tqdm import tqdm
 
-from torch_geometric.loader import DataLoader
-from torch_geometric.datasets import Planetoid
-
-from deeprobust.graph.data import Dataset
-
-import aagnn.utils as utils
-import aagnn.metrics as metrics
-import aagnn.dataLoading as dataLoading
-from aagnn.training import train_step
-from aagnn.models import GCN
-
+from aagnn.GCN import GCN
+from aagnn.graphData import loadGraph
+from aagnn import utils
+from aagnn import metrics
 
 def main():
     parser = argparse.ArgumentParser()
@@ -37,11 +30,11 @@ def main():
                         help='Weight decay (L2 loss on parameters)')
     parser.add_argument('--hidden_layers', type=int, default=32,
                         help='Number of hidden layers')
+    parser.add_argument('--dropout', type=float, default=0.5,
+                        help='Dropout rate for GCN')
 
-    parser.add_argument('--attack_type', type=str, default="min_max",
-                        help='minimize loss or maximize loss of adj matrix (min_min or min_max)')
-    parser.add_argument('--protected_label', type=int, default=3, 
-                        help='label to "protect"')
+    parser.add_argument('--protect_size', type=float, default=0.14,
+                        help='Number of randomly chosen protected nodes')
     parser.add_argument('--ptb_rate', type=float, default=0.5,
                         help='Perturbation rate (percentage of available edges)')
 
@@ -51,6 +44,8 @@ def main():
                         help='Epochs to perturb adj matrix')
     parser.add_argument('--surrogate_epochs', type=int, default=10,
                         help='Epochs to train surrogate')
+
+
     parser.add_argument('--surrogate_train', type=str, default="N", #Y
                         help='Enable continual training on surrogate')
     
@@ -82,257 +77,210 @@ def main():
     # Load data
     ################################################
 
-    data = Dataset(
-        root=args.data_dir, 
-        name=args.dataset, 
-        setting='gcn', 
-        seed=args.data_seed)
-
-    adj, features, labels, idx_train, idx_val, idx_test = \
-        dataLoading.aagnn_format(data, device, args, verbose=True)
-
-    print((labels == args.protected_label).sum())
+    adj, labels, features, idx_train, idx_val, idx_test = loadGraph(args.data_dir, args.dataset, 'gcn', args.data_seed, device)
     
     ################################################
     # Baseline
     ################################################
-    
-    print('==== Training regular model ====')
 
-    baseline_model = GCN(
+    baseline = GCN(
         input_features=features.shape[1],
         output_classes=labels.max().item()+1,
-        hidden_layers=args.hidden_layers
-    ).to(device)
+        hidden_layers=args.hidden_layers,
+        device=device,
+        lr=args.model_lr,
+        dropout=args.dropout,
+        weight_decay=args.weight_decay,
+        name="baseline"
+        )
 
-    baseline_model.train()
+    baseline.fit(features, adj, labels, idx_train, idx_test, args.reg_epochs)
+
+    ################################################
+    # Protected set
+    ################################################
+
+    g0 = torch.rand(features.shape[0]) <= args.protect_size
+    print(f"Number of protected nodes: {g0.sum():.0f}")
+    print(f"Protected Size: {g0.sum() / features.shape[0]:.2%}")
+    
+    # g0 = labels == args.protected_label
+    g_g0 = ~g0
+
+    ################################################
+    # Perturbing
+    ################################################
+
+    surrogate = GCN(
+        input_features=features.shape[1],
+        output_classes=labels.max().item()+1,
+        hidden_layers=args.hidden_layers,
+        device=device,
+        lr=args.model_lr,
+        dropout=args.dropout,
+        weight_decay=args.weight_decay,
+        name="surrogate"
+        )
+    
+    surrogate.fit(features, adj, labels, idx_train, idx_test, args.surrogate_epochs)
+    surrogate.eval()
+
+    perturbations = torch.zeros_like(adj).float()
+    perturbations.requires_grad = True
+
+    num_perturbations = int(args.ptb_rate * (adj.sum() / 2))
+
+    t = tqdm(range(args.ptb_epochs), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
+    t.set_description("Perturbing")
+    
+    def loss_func(pred, labels):
+        loss = 2 * F.cross_entropy(pred[g0], labels[g0]) \
+            - F.cross_entropy(pred[g_g0], labels[g_g0]) \
+            # - F.cross_entropy(pred, labels)
+        
+        return loss
+
 
     optimizer = torch.optim.Adam(
-        baseline_model.parameters(), lr=args.model_lr, weight_decay=args.weight_decay)
-
-    t = tqdm(range(args.reg_epochs), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
-    t.set_description("Regular")
+        surrogate.parameters(), lr=1e-3, weight_decay=args.weight_decay)
 
     for epoch in t:
-        predictions = train_step(
-            model=baseline_model,
-            optimizer=optimizer,
-            features=features,
-            adj=adj,
-            labels=labels,
-            idx_train=idx_train,
-            loss_fn=F.cross_entropy,
-            iterator=t,
-        )
-    
-    ################################################
-    # Perturbing the data
-    ################################################
-
-    print('==== Perturbing ====')
-
-    if args.edge_case == "add":
-        target_idx = (labels == args.protected_label).int().nonzero().permute(1, 0).squeeze()
-
-        # print(target_idx)
-
-        perturbed = adj.clone()
-
-        # print(perturbed.shape)
-
-        perturbed.index_fill_(1, target_idx, 1)
-        perturbed.index_fill_(0, target_idx, 1)
-
-        best = perturbed
-
-    elif args.edge_case == "remove":
-        target_idx = (labels == args.protected_label).int().nonzero().permute(1, 0).squeeze()
-
-        # print(target_idx)
-
-        perturbed = adj.clone()
-
-        # print(perturbed.shape)
-
-        perturbed.index_fill_(1, target_idx, 0)
-        perturbed.index_fill_(0, target_idx, 0)
-
-        best = perturbed
-    else:
-        # Training surrogate
-        surrogate = GCN(
-            input_features=features.shape[1],
-            output_classes=labels.max().item()+1,
-            hidden_layers=args.hidden_layers
-        ).to(device)
-
-        surrogate.train()
-
-        optimizer = torch.optim.Adam(
-            surrogate.parameters(), lr=args.model_lr, weight_decay=args.weight_decay)
-
-        t = tqdm(range(args.surrogate_epochs), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
-        t.set_description("Surrogate")
-        for epoch in t:
-            predictions = train_step(
-                model=surrogate,
-                optimizer=optimizer,
-                features=features,
-                adj=adj,
-                labels=labels,
-                idx_train=idx_train,
-                loss_fn=F.cross_entropy,
-                iterator=t,
-            )
-        
-        # Perturbing
         surrogate.eval()
+        modified_adj = utils.get_modified_adj(adj, perturbations)
+        predictions = surrogate(features, modified_adj)
 
-        perturbations = torch.zeros_like(adj).float()
-        perturbations.requires_grad = True
+        loss = loss_func(predictions, labels)
 
-        num_perturbations = int(args.ptb_rate * (adj.sum() / 2))
+        adj_grad = torch.autograd.grad(loss, perturbations)[0]
 
-        t = tqdm(range(args.ptb_epochs), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
-        t.set_description("Perturbing: ")
+        lr = ((args.ptb_rate) * 5) / ((epoch+1) ** 2)
+        
+        perturbations = perturbations + (lr * adj_grad)
 
-        g0 = [labels == args.protected_label]
-        g_ex_g0 = [labels != args.protected_label]
+        perturbations = utils.projection(perturbations, num_perturbations)
 
-        for epoch in t:
-            # Perturb edges
-            modified_adj = utils.invert_by(adj, perturbations)
-            predictions = surrogate(features, modified_adj).squeeze()
+        # Train surrogate
+        if args.surrogate_train == "Y":
+            modified_adj = utils.get_modified_adj(adj, perturbations)
 
-            loss = F.cross_entropy(predictions[g0], labels[g0]) - F.cross_entropy(predictions[g_ex_g0], labels[g_ex_g0]) - F.cross_entropy(predictions, labels)
+            surrogate.train()
+            optimizer.zero_grad()
+            p = surrogate(features, modified_adj)
 
-            adj_grad = torch.autograd.grad(loss, perturbations)[0]
+            surr_loss = F.cross_entropy(p[idx_train], labels[idx_train])
+            surr_loss.backward()
+            optimizer.step() 
 
-            lr = ((args.ptb_rate) * 5) / ((epoch+1) ** 2)
+            t.set_postfix({"adj loss": loss.item(),
+                "adj_grad": int(adj_grad.sum()),
+                "pre-projection": int(perturbations.sum()),
+                "target": int(num_perturbations),
+                "surrogate_loss": surr_loss.item()})
 
-            # diff = max(abs(perturbations.sum() - num_perturbations), num_perturbations)
-            # mult = adj_grad * (diff / adj_grad.sum())
+    with torch.no_grad():
 
-            perturbations = perturbations + (lr * adj_grad)
+        max_loss = -1000
 
-            # print(adj_grad.sum(), perturbations.sum(), num_perturbations)
+        for k in range(0,3):
+            sample = torch.bernoulli(perturbations)
+            modified_adj = utils.get_modified_adj(adj, perturbations)
 
-            t.set_postfix({"adj_grad": int(adj_grad.sum())})
-            t.set_postfix({"pre-projection": int(perturbations.sum())})
-            t.set_postfix({"target": int(num_perturbations)})
+            predictions = surrogate(features, modified_adj)
 
-            perturbations = utils.projection(perturbations, num_perturbations)
+            loss = loss_func(predictions, labels)
 
-            t.set_postfix({"edges_perturbed": int(perturbations.sum())})
-
-            # Train surrogate
-            if args.surrogate_train == "Y":
-                modified_adj = utils.invert_by(adj, perturbations)
-
-                train_step(
-                    model=surrogate,
-                    optimizer=optimizer,
-                    features=features,
-                    adj=modified_adj,
-                    labels=labels,
-                    idx_train=idx_train,
-                    loss_fn=F.cross_entropy,
-                    iterator=t
-                )
-
-        perturbations = perturbations.clamp(0,1)
-        best = utils.random_sample(
-            surrogate_model=surrogate,
-            features=features,
-            adj=adj,
-            labels=labels,
-            idx_test=idx_test,
-            loss_fn=lambda x, y: -F.cross_entropy(x, y),
-            perturbations=perturbations
-        )
+            if loss > max_loss:
+                max_loss = loss
+                best = sample
     
+    print(f"Best sample loss: {loss:.2f}\t Edges: {best.sum() / 2:.0f}")
+
     ################################################
     # Train model on "locked" graph
     ################################################
     
     print("==== Training model on 'locked' data ====")
 
-    locked_adj = utils.invert_by(adj, best)
+    locked_adj = utils.get_modified_adj(adj, best)
 
     locked_model = GCN(
         input_features=features.shape[1],
         output_classes=labels.max().item()+1,
-        hidden_layers=args.hidden_layers
-    ).to(device)
-
-    locked_model.train()
-
-    optimizer = torch.optim.Adam(
-        locked_model.parameters(), lr=args.model_lr, weight_decay=args.weight_decay)
-
-    t = tqdm(range(args.reg_epochs), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
-    for epoch in t:
-        predictions = train_step(
-            model=locked_model,
-            optimizer=optimizer,
-            features=features,
-            adj=locked_adj,
-            labels=labels,
-            idx_train=idx_train,
-            loss_fn=F.cross_entropy,
-            iterator=t,
+        hidden_layers=args.hidden_layers,
+        device=device,
+        lr=args.model_lr,
+        dropout=args.dropout,
+        weight_decay=args.weight_decay,
+        name="locked_model"
         )
 
-    ################################################
-    # Evaluate Accuracy
-    ################################################
+    locked_model.fit(features, locked_adj, labels, idx_train, idx_test, args.reg_epochs)
 
+    ################################################
+    # Evaluation
+    ################################################
     
-    all_labels = torch.unique(labels).numpy()
-    excluding = all_labels[all_labels != args.protected_label]
-
-    print("==== Baseline accuracies ====")
-
-    baseline_model.eval()
-    predictions = baseline_model(features, adj).squeeze()
-
-    c_G = metrics.acc_by_label(predictions, labels, idx_test, all_labels)
-    c_G0 = metrics.acc_by_label(predictions, labels, idx_test, [args.protected_label])
-    c_G_G0 = metrics.acc_by_label(predictions, labels, idx_test, excluding)
-
-    print(f"Base | G      : {c_G:.2%}")
-    print(f"Base | G0     : {c_G0:.2%}")
-    print(f"Base | G - G0 : {c_G_G0:.2%}")
-
-    print("==== Locked accuracies ====")
+    baseline.eval()
+    predictions = baseline(features, adj)
 
     locked_model.eval()
-    predictions = locked_model(features, locked_adj).squeeze()
+    lock_predictions = locked_model(features, locked_adj)
 
-    l_G = metrics.acc_by_label(predictions, labels, idx_test, all_labels)
-    l_G0 = metrics.acc_by_label(predictions, labels, idx_test, [args.protected_label])
-    l_G_G0 = metrics.acc_by_label(predictions, labels, idx_test, excluding)
+    b_g0 = metrics.acc(predictions[g0], labels[g0])
+    b_g_g0 = metrics.acc(predictions[g_g0], labels[g_g0])
+    b_g = metrics.acc(predictions, labels)
 
-    print(f"Lock | G      : {l_G:.2%}")
-    print(f"Lock | G0     : {l_G0:.2%}")
-    print(f"Lock | G - G0 : {l_G_G0:.2%}")
+    l_g0 = metrics.acc(lock_predictions[g0], labels[g0])
+    l_g_g0 = metrics.acc(lock_predictions[g_g0], labels[g_g0])
+    l_g = metrics.acc(lock_predictions, labels)
 
-    print("==== Change ====")
 
-    d_G = l_G - c_G
-    d_G0 = l_G0 - c_G0
-    d_G_G0 = l_G_G0 - c_G_G0
+    print("==== Accuracies ====")
+    print(f"         Base\tLock\tChange")
+    print(f"G0     | {b_g0:.2%}\t{l_g0:.2%}\t{l_g0-b_g0:.2%}")
+    print(f"G - G0 | {b_g_g0:.2%}\t{l_g_g0:.2%}\t{l_g_g0-b_g_g0:.2%}")
+    print(f"G      | {b_g:.2%}\t{l_g:.2%}\t{l_g-b_g:.2%}")
 
-    print(f"Delta | G      : {d_G:.2%}")
-    print(f"Delta | G0     : {d_G0:.2%}")
-    print(f"Delta | G - G0 : {d_G_G0:.2%}")
+    # Metrics
+
+    change = locked_adj - adj
+
+    def count(bool_list):
+        idx = utils.bool_to_idx(bool_list).squeeze()
+
+        temp_adj = change.clone()
+        temp_adj.index_fill_(dim=0, index=idx, value=0)
+        diff = change - temp_adj
+
+        temp_adj = diff.clone()
+        temp_adj.index_fill_(dim=1, index=idx, value=0)
+        diff = diff - temp_adj
+
+        add = int(diff.clamp(0,1).sum() / 2)
+        remove = int(diff.clamp(-1,0).abs().sum() / 2)
+
+        return add, remove
+
+    total_add = int(change.clamp(0,1).sum() / 2)
+    total_remove = int(change.clamp(-1,0).abs().sum() / 2)
+
+    g0g0_add, g0g0_remove = count(g0)
+    gXgX_add, gXgX_remove = count(g_g0)
+
+    g0gX_add = total_add - g0g0_add - gXgX_add
+    g0gX_remove = total_remove - g0g0_remove - gXgX_remove
 
     print("==== Edges ====")
+    print(f"          Add\tRemove")
+    print(f"G0 - G0 | {g0g0_add}\t{g0g0_remove}")
+    print(f"G0 - G  | {g0gX_add}\t{g0gX_remove}")
+    print(f"G  - G  | {gXgX_add}\t{gXgX_remove}")
+    print(f"Total   | {total_add}\t{total_remove}")
+    print(f"Grand total: {total_add+total_remove}")
 
-    target_idx = labels == args.protected_label
-
-    metrics.show_target_change_matrix(adj, locked_adj, labels, target_idx)
-
+    ################################################
+    # CSV
+    ################################################
     
     if args.csv != '':
         csv_path = f"./{args.csv}.csv"
@@ -364,7 +312,6 @@ def main():
                 
             f.write(",".join([str(x) for x in data]) + "\n")
 
-
-
 if __name__ == "__main__":
+    print()
     main()

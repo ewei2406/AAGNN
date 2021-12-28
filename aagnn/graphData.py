@@ -4,6 +4,36 @@ import numpy as np
 from aagnn.dataset import Dataset
 import aagnn.utils as utils
 
+
+def loadGraph(root, name, setting, seed, device, verbose=True):
+    data = Dataset(root, name, setting, seed)
+
+    adj = torch.LongTensor(data.adj.todense()).to(device)
+    labels = torch.LongTensor(data.labels).to(device)
+    features = torch.FloatTensor(np.array(data.features.todense())).to(device)
+
+    def indices_to_bool(indices, length):
+        arr = torch.zeros(length)
+        arr[indices] = 1
+        return arr > 0
+
+    idx_train = utils.idx_to_bool(data.idx_train, features.shape[0])
+    idx_val = utils.idx_to_bool(data.idx_val, features.shape[0])
+    idx_test = utils.idx_to_bool(data.idx_test, features.shape[0])
+
+    if verbose:
+        print()
+        print(f'==== Dataset Summary: {name} ====')
+        print(f'adj shape: {list(adj.shape)}')
+        print(f'feature shape: {list(features.shape)}')
+        print(f'num labels: {labels.max().item()+1}')
+        print(f'split seed: {seed}')
+        print(
+            f'train|val|test: {idx_train.sum()}|{idx_val.sum()}|{idx_test.sum()}')
+    
+    return adj, labels, features, idx_train, idx_val, idx_test
+
+
 class Graph:
     def __init__(self, root, name, setting, seed, device):
         data = Dataset(root, name, setting, seed)

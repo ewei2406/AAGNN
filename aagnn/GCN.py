@@ -28,11 +28,10 @@ class GCN(torch.nn.Module):
         x = F.dropout(x, self.dropout, training=self.training)
         x = self.conv2(x, adj)
 
-        return F.log_softmax(x, dim=1)
+        return F.log_softmax(x, dim=1).squeeze()
     
-    def fit(self, graph, epochs):
+    def fit(self, features, adj, labels, idx_train, idx_test, epochs):
 
-        print()
 
         self.train()
         optimizer = torch.optim.Adam(
@@ -43,9 +42,9 @@ class GCN(torch.nn.Module):
 
         for epoch in t:
             optimizer.zero_grad()
-            predictions = self(graph.features, graph.adj).squeeze()
+            predictions = self(features, adj)
             
-            loss = F.cross_entropy(predictions[graph.idx_train], graph.labels[graph.idx_train])
+            loss = F.cross_entropy(predictions[idx_train], labels[idx_train])
             
             loss.backward()
             optimizer.step()

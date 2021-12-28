@@ -8,7 +8,7 @@ import torch
 def acc(predictions, labels):
     correct = (predictions.argmax(1) == labels).sum()
     acc = correct / predictions.size(dim=0)
-    return acc
+    return acc.item()
 
 
 

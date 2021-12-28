@@ -87,8 +87,11 @@ def make_symmetric(adj):
 def get_modified_adj(adj, perturbations):
     """
     Inverts the adjacency matrix by a perturbation matrix (where 1 is to perturb, 0 is to not perturb)
+    Uses only the bottom triangle of the perturbation matrix
     """
-    return (adj + perturbations) - torch.mul(adj * perturbations, 2)
+
+    tri = (adj + perturbations) - torch.mul(adj * perturbations, 2)
+    return tri
 
 
 def projection(perturbations, n_perturbations):

@@ -81,10 +81,10 @@ def main():
     # Load data
     ################################################
 
-    adj, labels, features, idx_train, idx_val, idx_test = loadGraph(args.data_dir, args.dataset, 'gcn', args.data_seed, device)
-    print(adj.sum())
+    # adj, labels, features, idx_train, idx_val, idx_test = loadGraph(args.data_dir, args.dataset, 'gcn', args.data_seed, device)
+    # print(adj.sum())
 
-    d = loadData("./pokec/region_job_relationship.txt", "seed", "device")
+    d = loadData("./pokec/region_job_2_relationship.txt", "seed", "device")
     print(d)
 
     ################################################

@@ -37,9 +37,10 @@ def loadGraph(root, name, setting, seed, device, verbose=True):
 
 def loadData(root, seed, device, verbose=True):
     edges = np.loadtxt(root, delimiter="\t", dtype=int)
-    edges = torch.from_numpy(edges)
+    edges = torch.from_numpy(edges).t()
+    adj = utils.to_adj(edges)
 
-    return edges
+    return adj
 
 
 class Graph:

@@ -1,7 +1,7 @@
 import numpy as np
 import torch.nn.functional as F
 import torch
-# from .utils import to_index
+from . import utils
 
 
 
@@ -10,7 +10,88 @@ def acc(predictions, labels):
     acc = correct / predictions.size(dim=0)
     return acc.item()
 
+def mask_adj(adj, bool_list):
+    idx = utils.bool_to_idx(bool_list).squeeze()
 
+    temp_adj = adj.clone()
+    temp_adj.index_fill_(dim=0, index=idx, value=0)
+    diff = adj - temp_adj
+
+    temp_adj = diff.clone()
+    temp_adj.index_fill_(dim=1, index=idx, value=0)
+    diff = diff - temp_adj
+
+    # add = int(diff.clamp(0,1).sum() / 2)
+    # remove = int(diff.clamp(-1,0).abs().sum() / 2)
+
+    return diff
+
+
+
+def show_metrics(changes, labels, g0):
+    print("METRICS===================")
+
+    def print_same_diff(type, adj):
+        edges = utils.to_edges(adj)
+        same = 0
+        for edge in edges.t():
+            same += int(labels[edge[0]].item() == labels[edge[1]].item())
+        
+        diff = edges.shape[1] - same
+
+        print(f"{type} | {int(same)}  \t{int(diff)}  \t{int(same+diff)}")
+
+
+    def print_add_remove(adj):
+        add = adj.clamp(0,1)
+        remove = adj.clamp(-1,0).abs()
+        print("      SAME \tDIFF\tTOTAL")
+        print("    +----------------------------")
+        print_same_diff("ADD", add)
+        print_same_diff("REM", remove)
+        print("    +----------------------------")
+    # print_add_remove(changes)
+
+    print("Edge type: G0-G0 =====")
+    g0_adj = mask_adj(changes, g0)
+    print_add_remove(g0_adj)
+
+    print("Edge type: GX-GX =====")
+    gX_adj = mask_adj(changes, ~g0)
+    print_add_remove(gX_adj)
+
+    print("Edge type: G0-GX =====")
+    g0gX_adj = (changes - g0_adj - gX_adj)
+    print_add_remove(g0gX_adj)
+
+    print_same_diff("TOT", changes)
+
+
+    # total_add = changes.clamp(0,1).sum() / 2
+    # total_remove = changes.clamp(-1,0).abs().sum() / 2
+
+    # edges = to_edges(changes).t()
+
+    # total_same = 0
+
+    # for edge in edges:
+    #     same = labels[edge[0]].item() == labels[edge[1]].item()
+
+    #     n1_isg0 = g0[edge[0]]
+    #     n2_isg0 = g0[edge[1]]
+
+    #     if same:
+    #         total_same += 1
+
+    #     if n1_isg0 and n2_isg0:
+            
+
+    # print(total_same)
+
+    # print(f"Add: {total_add:0}\t Remove: {total_remove:0}")
+    # print(edges.shape[1])
+    # print(labels)
+    # print(g0)
 
 # def show_acc(epoch, predictions, labels, idx_train, idx_test, verbose=False, prefix=""):
 #     train_correct = (predictions.argmax(

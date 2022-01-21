@@ -66,7 +66,7 @@ def to_edges(adj):
     """
     Converts an adjacency matrix to a list of edges
     """
-    res = adj.float().nonzero().permute(1, 0)
+    res = torch.triu(adj).float().nonzero().permute(1, 0)
     return res
 
 

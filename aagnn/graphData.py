@@ -35,6 +35,13 @@ def loadGraph(root, name, setting, seed, device, verbose=True):
     return adj, labels, features, idx_train, idx_val, idx_test
 
 
+def loadData(root, seed, device, verbose=True):
+    edges = np.loadtxt(root, delimiter="\t", dtype=int)
+    edges = torch.from_numpy(edges)
+
+    return edges
+
+
 class Graph:
     def __init__(self, root, name, setting, seed, device):
         data = Dataset(root, name, setting, seed)

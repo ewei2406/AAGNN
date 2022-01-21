@@ -7,7 +7,7 @@ import numpy as np
 from tqdm import tqdm
 
 from aagnn.GCN import GCN
-from aagnn.graphData import loadGraph
+from aagnn.graphData import loadGraph, loadData
 from aagnn import utils
 from aagnn import metrics
 
@@ -40,15 +40,15 @@ def main():
     parser.add_argument('--ptb_rate', type=float, default=0.5,
                         help='Perturbation rate (percentage of available edges)')
 
-    parser.add_argument('--reg_epochs', type=int, default=10,
+    parser.add_argument('--reg_epochs', type=int, default=50,
                         help='Epochs to train models')
-    parser.add_argument('--ptb_epochs', type=int, default=5,
+    parser.add_argument('--ptb_epochs', type=int, default=20,
                         help='Epochs to perturb adj matrix')
-    parser.add_argument('--surrogate_epochs', type=int, default=10,
+    parser.add_argument('--surrogate_epochs', type=int, default=20,
                         help='Epochs to train surrogate')
 
 
-    parser.add_argument('--surrogate_train', type=str, default="N", #Y
+    parser.add_argument('--surrogate_train', type=str, default="Y", #Y
                         help='Enable continual training on surrogate')
     
     parser.add_argument('--csv', type=str, default='',
@@ -82,7 +82,22 @@ def main():
     ################################################
 
     adj, labels, features, idx_train, idx_val, idx_test = loadGraph(args.data_dir, args.dataset, 'gcn', args.data_seed, device)
-    
+    print(adj.sum())
+
+    ################################################
+    # Protected set
+    ################################################
+
+    if args.random_select == "Y":
+        g0 = torch.rand(features.shape[0]) <= args.protect_size
+    else:
+        g0 = labels == 5
+
+    g_g0 = ~g0
+
+    print(f"Number of protected nodes: {g0.sum():.0f}")
+    print(f"Protected Size: {g0.sum() / features.shape[0]:.2%}")
+
     ################################################
     # Baseline
     ################################################
@@ -99,20 +114,6 @@ def main():
         )
 
     baseline.fit(features, adj, labels, idx_train, idx_test, args.reg_epochs)
-
-    ################################################
-    # Protected set
-    ################################################
-
-    if args.random_select == "Y":
-        g0 = torch.rand(features.shape[0]) <= args.protect_size
-    else:
-        g0 = labels == 5
-
-    g_g0 = ~g0
-
-    print(f"Number of protected nodes: {g0.sum():.0f}")
-    print(f"Protected Size: {g0.sum() / features.shape[0]:.2%}")
 
     ################################################
     # Perturbing
@@ -137,12 +138,13 @@ def main():
         perturbations.requires_grad = True
 
         num_perturbations = int(args.ptb_rate * (adj.sum() / 2))
+        # num_perturbations = (adj.sum().item() / 2) * 0.20
 
         t = tqdm(range(args.ptb_epochs), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
         t.set_description("Perturbing")
         
         def loss_func(pred, labels):
-            loss = 2 * F.cross_entropy(pred[g0], labels[g0]) \
+            loss = F.cross_entropy(pred[g0], labels[g0]) \
                 - F.cross_entropy(pred[g_g0], labels[g_g0]) \
                 # - F.cross_entropy(pred, labels)
             
@@ -154,25 +156,20 @@ def main():
         for epoch in t:
             surrogate.eval()
             modified_adj = utils.get_modified_adj(adj, perturbations)
+
             predictions = surrogate(features, modified_adj)
 
             loss = loss_func(predictions, labels)
 
             adj_grad = torch.autograd.grad(loss, perturbations)[0]
 
-            adj_grad = utils.make_symmetric(adj_grad) # Removing this creates "impossible" adj, but works well
-
-            lr = ((args.ptb_rate) * 5) / ((epoch+1) ** 2)
+            lr = (num_perturbations * 2.5) / (adj_grad.abs().sum())
             
             perturbations = perturbations + (lr * adj_grad)
-            # perturbations = utils.make_symmetric(perturbations)
+
+            pre_projection = int(perturbations.sum() / 2)
 
             perturbations = utils.projection(perturbations, num_perturbations)
-
-            t.set_postfix({"adj loss": loss.item(),
-                "adj_grad": int(adj_grad.sum()),
-                "pre-projection": int(perturbations.sum() / 2),
-                "target": int(num_perturbations / 2)})
 
             # Train surrogate
             if args.surrogate_train == "Y":
@@ -188,9 +185,14 @@ def main():
 
                 t.set_postfix({"adj loss": loss.item(),
                     "adj_grad": int(adj_grad.sum()),
-                    "pre-projection": int(perturbations.sum() / 2),
+                    "pre-projection": pre_projection,
                     "target": int(num_perturbations / 2),
                     "surrogate_loss": surr_loss.item()})
+            else:
+                t.set_postfix({"adj loss": loss.item(),
+                    "adj_grad": int(adj_grad.sum()),
+                    "pre-projection": pre_projection,
+                    "target": int(num_perturbations / 2)})
 
         with torch.no_grad():
 
@@ -199,6 +201,8 @@ def main():
             for k in range(0,3):
                 sample = torch.bernoulli(perturbations)
                 modified_adj = utils.get_modified_adj(adj, perturbations)
+
+                modified_adj = utils.make_symmetric(modified_adj) # Removing this creates "impossible" adj, but works well
 
                 predictions = surrogate(features, modified_adj)
 
@@ -297,38 +301,43 @@ def main():
     locked_adj = utils.get_modified_adj(adj, best)
     change = locked_adj - adj
 
-    def count(bool_list):
-        idx = utils.bool_to_idx(bool_list).squeeze()
+    metrics.show_metrics(change, labels, g0)
 
-        temp_adj = change.clone()
-        temp_adj.index_fill_(dim=0, index=idx, value=0)
-        diff = change - temp_adj
+    # locked_adj = utils.get_modified_adj(adj, best)
+    # change = locked_adj - adj
 
-        temp_adj = diff.clone()
-        temp_adj.index_fill_(dim=1, index=idx, value=0)
-        diff = diff - temp_adj
+    # def count(bool_list):
+    #     idx = utils.bool_to_idx(bool_list).squeeze()
 
-        add = int(diff.clamp(0,1).sum() / 2)
-        remove = int(diff.clamp(-1,0).abs().sum() / 2)
+    #     temp_adj = change.clone()
+    #     temp_adj.index_fill_(dim=0, index=idx, value=0)
+    #     diff = change - temp_adj
 
-        return add, remove
+    #     temp_adj = diff.clone()
+    #     temp_adj.index_fill_(dim=1, index=idx, value=0)
+    #     diff = diff - temp_adj
 
-    total_add = int(change.clamp(0,1).sum() / 2)
-    total_remove = int(change.clamp(-1,0).abs().sum() / 2)
+    #     add = int(diff.clamp(0,1).sum() / 2)
+    #     remove = int(diff.clamp(-1,0).abs().sum() / 2)
 
-    g0g0_add, g0g0_remove = count(g0)
-    gXgX_add, gXgX_remove = count(g_g0)
+    #     return add, remove
 
-    g0gX_add = total_add - g0g0_add - gXgX_add
-    g0gX_remove = total_remove - g0g0_remove - gXgX_remove
+    # total_add = int(change.clamp(0,1).sum() / 2)
+    # total_remove = int(change.clamp(-1,0).abs().sum() / 2)
 
-    print("==== Edges ====")
-    print(f"          Add\tRemove")
-    print(f"G0 - G0 | {g0g0_add}\t{g0g0_remove}")
-    print(f"G0 - GX | {g0gX_add}\t{g0gX_remove}")
-    print(f"GX - GX | {gXgX_add}\t{gXgX_remove}")
-    print(f"Total   | {total_add}\t{total_remove}")
-    print(f"Grand total: {change.abs().sum().item() / 2:.0f}")
+    # g0g0_add, g0g0_remove = count(g0)
+    # gXgX_add, gXgX_remove = count(g_g0)
+
+    # g0gX_add = total_add - g0g0_add - gXgX_add
+    # g0gX_remove = total_remove - g0g0_remove - gXgX_remove
+
+    # print("==== Edges ====")
+    # print(f"          Add\tRemove")
+    # print(f"G0 - G0 | {g0g0_add}\t{g0g0_remove}")
+    # print(f"G0 - GX | {g0gX_add}\t{g0gX_remove}")
+    # print(f"GX - GX | {gXgX_add}\t{gXgX_remove}")
+    # print(f"Total   | {total_add}\t{total_remove}")
+    # print(f"Grand total: {change.abs().sum().item() / 2:.0f}")
 
     ################################################
     # CSV
@@ -343,6 +352,7 @@ def main():
             
             if not file_exists:
                 headers = [
+                    'seed',
                     'reg_epochs', 
                     'ptb_epochs', 
                     'surrogate_epochs', 
@@ -357,6 +367,7 @@ def main():
                 f.write(",".join(headers) + "\n")
 
             data = [
+                args.seed,
                 args.reg_epochs, 
                 args.ptb_epochs,
                 args.surrogate_epochs,

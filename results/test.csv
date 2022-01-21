@@ -1,0 +1,2 @@
+reg_epochs,ptb_epochs,surrogate_epochs,randomized,ptb_rate,protected_size,retrain,base_g0,lock_g0,change_g0,base_g_g0,lock_g_g0,lock_g_g0,g0g0_add,g0g0_remove,g0gX_add,g0gX_remove,gXgX_add,gXgX_remove,total,trivial_g0g0,trivial_g0gX
+10,5,10,Y,0.5,0.14,N,0.7692307829856873,0.12912088632583618,-0.6401098966598511,0.769197940826416,0.7504266500473022,-0.01877129077911377,65970,0,0,1234,0,0,67204,add,remove
